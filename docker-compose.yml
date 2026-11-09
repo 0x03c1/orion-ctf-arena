@@ -1,0 +1,132 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Arena Órion — CTFd (placar oficial) + alvo isolado + 2 túneis.
+#  Suba com ./start.sh (faz build, provisiona o CTFd e abre os túneis).
+#
+#  Redes:
+#   - borda      (bridge, com internet)  : só cloudflared + CTFd
+#   - ctfd_int   (internal, SEM internet) : CTFd + banco + redis
+#   - alvo       (internal, SEM internet) : alvo Órion (não alcança o Mac/LAN/web)
+#  Portas publicadas no host: SÓ o CTFd em 127.0.0.1 (admin/provisionamento).
+#  O alvo NÃO publica porta nenhuma; alunos chegam só pelos túneis.
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ---------------- Placar / plataforma ----------------
+  ctfd:
+    image: ctfd/ctfd:3.7.5
+    container_name: arena-ctfd
+    restart: "no"
+    environment:
+      - SECRET_KEY=${CTFD_SECRET_KEY}
+      - DATABASE_URL=mysql+pymysql://ctfd:${DB_PASSWORD}@ctfd-db/ctfd
+      - REDIS_URL=redis://ctfd-redis:6379
+      - WORKERS=1
+      - LOG_FOLDER=/var/log/CTFd
+      - ACCESS_LOG=-
+      - ERROR_LOG=-
+      - REVERSE_PROXY=true
+      - ORION_TEAM_SECRET=${ORION_TEAM_SECRET}     # usado pelo plugin de flags por equipe
+    volumes:
+      - ./ctfd-plugins/orion_equipe:/opt/CTFd/CTFd/plugins/orion_equipe:ro
+      - ctfd_uploads:/var/uploads
+      - ctfd_logs:/var/log/CTFd
+    ports:
+      - "127.0.0.1:8000:8000"       # SÓ loopback: admin do professor + provisionamento
+    networks: [borda, ctfd_int]
+    mem_limit: 1g                    # teto de RAM (máquina de 8 GB)
+    depends_on: [ctfd-db, ctfd-redis]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 40s
+
+  ctfd-db:
+    image: mariadb:10.11
+    container_name: arena-ctfd-db
+    restart: "no"
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=ctfd
+      - MARIADB_USER=ctfd
+      - MARIADB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - ctfd_db:/var/lib/mysql
+    networks: [ctfd_int]           # sem internet
+    mem_limit: 512m                # teto de RAM
+    command: [mysqld, --character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci, --wait_timeout=28800, --innodb-buffer-pool-size=128M, --performance-schema=OFF]
+
+  ctfd-redis:
+    image: redis:7-alpine
+    container_name: arena-ctfd-redis
+    restart: "no"
+    volumes:
+      - ctfd_redis:/data
+    networks: [ctfd_int]           # sem internet
+    mem_limit: 128m                # teto de RAM
+    command: ["redis-server", "--save", "", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
+
+  cloudflared-ctfd:
+    image: cloudflare/cloudflared:2026.10.7
+    container_name: arena-tunel-ctfd
+    restart: "no"
+    command: tunnel --no-autoupdate --url http://ctfd:8000 --loglevel info
+    networks: [borda]
+    depends_on:
+      ctfd:
+        condition: service_healthy
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # ---------------- Alvo (isolado) ----------------
+  orion:
+    build: ./orion
+    image: orion-arena:1.0
+    container_name: arena-orion
+    restart: "no"
+    environment:
+      - ORION_TEAM_SECRET=${ORION_TEAM_SECRET}
+    networks: [alvo]               # SÓ aqui: sem internet, sem host, sem LAN. (Sem porta publicada: isolado.)
+    mem_limit: 512m                # teto de RAM (PHP/Apache é leve)
+    cpus: 2
+    pids_limit: 500
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, NET_BIND_SERVICE]
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/80"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  cloudflared-orion:
+    image: cloudflare/cloudflared:2026.10.7
+    container_name: arena-tunel-orion
+    restart: "no"
+    command: tunnel --no-autoupdate --url http://orion:80 --loglevel info
+    networks: [alvo, borda]
+    depends_on:
+      orion:
+        condition: service_healthy
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  borda:
+    driver: bridge
+  ctfd_int:
+    internal: true
+  alvo:
+    internal: true
+
+volumes:
+  ctfd_db:
+  ctfd_redis:
+  ctfd_uploads:
+  ctfd_logs:

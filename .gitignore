@@ -1,0 +1,38 @@
+# Segredos e credenciais (NUNCA versionar)
+.env
+.env.local
+*.env
+!.env.example
+
+# Credenciais e gabaritos gerados por turma
+CREDENCIAIS-EQUIPES.txt
+credenciais*.txt
+*.secret
+
+# Artefatos de execucao
+.urls
+.caffeinate
+*.log
+
+# Sistema operacional
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Docker / dados locais
+*.sqlite
+*.db
+
+# Gabaritos e writeups (ficam locais, fora do repo publico: nao entregar a solucao)
+GABARITO-PROFESSOR.md
+GABARITO-ALUNOS.md
+EXPLICACAO-PASSO-A-PASSO.md
+PASSO-A-PASSO-KALI.md
+FERRAMENTAS-POR-DESAFIO.md
+validar-kali.sh
